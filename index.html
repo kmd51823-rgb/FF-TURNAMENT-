@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="hi"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FF Tournaments</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#121212;color:#eee;font:15px system-ui,sans-serif}
+.c{max-width:360px;margin:0 auto;padding:60px 20px;text-align:center}.c button{width:100%;margin-top:8px}
+input,select{width:100%;padding:12px;margin:6px 0;border-radius:10px;border:1px solid #333;background:#1e1e1e;color:#eee;font-size:15px}
+button{padding:12px 16px;border-radius:10px;border:1px solid #333;background:#1e1e1e;color:#eee;font-size:15px;cursor:pointer}
+.pr{background:#ff6b00;border-color:#ff6b00;color:#fff;font-weight:600}.pr:disabled{opacity:.5}
+header{position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;padding:14px 16px;background:#181818;border-bottom:1px solid #2a2a2a}
+main{padding:12px 12px 90px;max-width:560px;margin:0 auto}
+.cd{background:#1b1b1b;border:1px solid #2a2a2a;border-radius:14px;padding:14px;margin-bottom:12px}.cd h3{margin:0 0 8px}.cd p{margin:6px 0}
+.ch{display:inline-block;background:#2a2a2a;border-radius:20px;padding:3px 10px;margin:0 6px 4px 0;font-size:13px}
+.r{display:flex;gap:8px;margin-top:10px}.r .pr{flex:1}
+nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:#181818;border-top:1px solid #2a2a2a}
+nav button{flex:1;border:0;border-radius:0;background:none;padding:16px 0}nav .on{color:#ff6b00;font-weight:600}
+.er{color:#ff5252;min-height:20px}.m{text-align:center;color:#888;margin-top:40px}
+#toast{display:none;position:fixed;bottom:76px;left:50%;transform:translateX(-50%);background:#333;padding:10px 16px;border-radius:10px;z-index:9;max-width:90%}
+</style></head><body>
+<div id="app"></div><div id="toast"></div>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script>
+// 1) Firebase console > Project settings > Your apps > Web app se config yahan paste karo
+const firebaseConfig = {
+  apiKey: "PASTE_HERE",
+  authDomain: "PASTE_HERE",
+  projectId: "PASTE_HERE",
+  appId: "PASTE_HERE"
+};
+// 2) Apna admin email (isi email se login karoge to Admin tab dikhega)
+const ADMIN_EMAIL = "admin@gmail.com";
+
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth(), db = firebase.firestore();
+let U = null, tab = 't', T = [], M = [], unsub = [];
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt = ts => ts.toDate().toLocaleString('en-IN', {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'});
+const isAdmin = () => U && U.email === ADMIN_EMAIL;
+function toast(m){const e=$('#toast');e.textContent=m;e.style.display='block';clearTimeout(toast.t);toast.t=setTimeout(()=>e.style.display='none',2800)}
+function go(t){tab=t;render()}
+function live(){if(tab!=='a')render()}
+
+auth.onAuthStateChanged(u => {
+  U = u; unsub.forEach(f => f()); unsub = [];
+  if (u) {
+    unsub.push(db.collection('tournaments').orderBy('startTime').onSnapshot(s => {T = s.docs.map(d => ({id:d.id, ...d.data()})); live()}, e => toast(e.message)));
+    unsub.push(db.collection('users').doc(u.uid).collection('joined').orderBy('startTime').onSnapshot(s => {M = s.docs.map(d => ({id:d.id, ...d.data()})); live()}, e => toast(e.message)));
+  }
+  render();
+});
+
+async function login(){try{await auth.signInWithEmailAndPassword($('#e').value.trim(), $('#p').value)}catch(e){$('#err').textContent=e.message}}
+async function signup(){try{await auth.createUserWithEmailAndPassword($('#e').value.trim(), $('#p').value)}catch(e){$('#err').textContent=e.message}}
+
+async function join(id){
+  const ign = prompt('Free Fire name (IGN)'); if(!ign) return;
+  const ff = prompt('Free Fire UID'); if(!ff) return;
+  const tr = db.collection('tournaments').doc(id), pr = tr.collection('players').doc(U.uid),
+        my = db.collection('users').doc(U.uid).collection('joined').doc(id);
+  try {
+    await db.runTransaction(async x => {
+      const t = await x.get(tr), p = await x.get(pr);
+      if (p.exists) throw Error('Aap pehle se joined ho');
+      const d = t.data();
+      if ((d.joined||0) >= d.slots) throw Error('Slots full ho gaye');
+      x.set(pr, {uid:U.uid, email:U.email, ign:ign.trim(), freeFireUid:ff.trim(), joinedAt:firebase.firestore.FieldValue.serverTimestamp()});
+      x.set(my, {title:d.title, startTime:d.startTime});
+      x.update(tr, {joined: firebase.firestore.FieldValue.increment(1)});
+    });
+    toast('Join ho gaye! My Matches mein room ID dekho.');
+  } catch(e){toast(e.message)}
+}
+
+async function setRoom(id){
+  const r = prompt('Room ID'); if(!r) return;
+  const p = prompt('Room password'); if(p===null) return;
+  try{await db.collection('tournaments').doc(id).collection('private').doc('room').set({roomId:r.trim(), roomPass:p.trim()}); toast('Room details save ho gaye')}
+  catch(e){toast(e.message)}
+}
+
+async function room(id){
+  const m = M.find(x => x.id === id);
+  try {
+    const r = await db.collection('tournaments').doc(id).collection('private').doc('room').get();
+    alert(m.title + '\n\n' + (r.exists ? 'Room ID: ' + r.data().roomId + '\nPassword: ' + r.data().roomPass : 'Room ID abhi admin ne nahi diya. Thodi der baad dekho.'));
+  } catch(e){toast('Room details abhi nahi mil paaye')}
+}
+
+async function save(){
+  const g = i => $('#'+i).value.trim(), n = parseInt(g('sl')), d = $('#st').value;
+  if(!g('ti') || !n || !d) return toast('Title, slots aur time daalo');
+  try {
+    await db.collection('tournaments').add({title:g('ti'), mode:$('#mo').value, map:g('mp'), prize:g('pz'), slots:n, joined:0,
+      startTime:firebase.firestore.Timestamp.fromDate(new Date(d)), createdBy:U.uid});
+    toast('Tournament ban gaya'); go('t');
+  } catch(e){toast(e.message)}
+}
+
+const card = t => {
+  const j = t.joined || 0, full = j >= t.slots;
+  return `<div class="cd"><h3>${esc(t.title)}</h3>
+  <p><span class="ch">${esc(t.mode)}</span><span class="ch">${esc(t.map)}</span><span class="ch">${fmt(t.startTime)}</span></p>
+  ${t.prize ? `<p>Prize: ${esc(t.prize)}</p>` : ''}<p>Slots: ${j} / ${t.slots}</p>
+  <div class="r"><button class="pr" ${full ? 'disabled' : ''} onclick="join('${t.id}')">${full ? 'Full' : 'Join karo'}</button>
+  ${isAdmin() ? `<button onclick="setRoom('${t.id}')">Room set</button>` : ''}</div></div>`;
+};
+const mcard = m => `<div class="cd" onclick="room('${m.id}')"><h3>${esc(m.title)}</h3><p>${fmt(m.startTime)}</p><p class="ch">Room ID dekho</p></div>`;
+const adminForm = () => `<input id="ti" placeholder="Title" value="Free Fire Custom Room">
+  <select id="mo"><option>Solo</option><option>Duo</option><option selected>Squad</option></select>
+  <input id="mp" placeholder="Map" value="Bermuda"><input id="pz" placeholder="Prize (jaise Rs 500)">
+  <input id="sl" type="number" placeholder="Total slots" value="48"><input id="st" type="datetime-local">
+  <button class="pr" style="width:100%;margin-top:10px" onclick="save()">Tournament banao</button>`;
+
+function render(){
+  const a = $('#app');
+  if(!U){
+    a.innerHTML = `<div class="c"><h1>FF Tournaments</h1><input id="e" type="email" placeholder="Email"><input id="p" type="password" placeholder="Password (kam se kam 6)">
+    <p class="er" id="err"></p><button class="pr" onclick="login()">Login</button><button onclick="signup()">Naya account banao</button></div>`;
+    return;
+  }
+  const title = tab==='t' ? 'Tournaments' : tab==='m' ? 'My Matches' : 'Naya Tournament';
+  const body = tab==='t' ? (T.map(card).join('') || '<p class="m">Abhi koi tournament nahi hai</p>')
+    : tab==='m' ? (M.map(mcard).join('') || '<p class="m">Aapne abhi koi match join nahi kiya</p>') : adminForm();
+  a.innerHTML = `<header><b>${title}</b><button onclick="auth.signOut()">Logout</button></header><main>${body}</main>
+  <nav><button class="${tab==='t'?'on':''}" onclick="go('t')">Tournaments</button><button class="${tab==='m'?'on':''}" onclick="go('m')">My Matches</button>
+  ${isAdmin() ? `<button class="${tab==='a'?'on':''}" onclick="go('a')">Admin</button>` : ''}</nav>`;
+}
+</script></body></html>
